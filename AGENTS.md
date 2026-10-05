@@ -31,6 +31,8 @@
 - do not make commits yourself unless explicitly instructed
 - when working on a ticket (branch `issue/<ticket>`), prefix the title with `(#<ticket>)`
   (counts toward the 50 char limit)
+- the commit message is a guide to the commit: focus on intent and the why, don't mirror what
+  can be read from the diff
 
 ### Tool use
 
