@@ -29,12 +29,21 @@
 - title should be under 50 characters
 - body lines should be 72 characters or fewer
 - do not make commits yourself unless explicitly instructed
+- when working on a ticket (branch `issue/<ticket>`), prefix the title with `(#<ticket>)`
+  (counts toward the 50 char limit)
 
 ### Tool use
 
 - in VS Code, prefer editor/MCP tools and LSP diagnostics over CLI, except for large batch edits
 
-## details
+## Details
 
 Detailed instructions, if any, can be found in `./.agents`, see the
 [index](./.agents/README.md).
+
+Look for a `PLAN.<ticket>` folder, where `<ticket>` is the GitHub issue number in the branch name
+(e.g. `issue/42` → `PLAN.42`).
+If it exists, it contains instructions and data supporting the current task.
+
+On conflict, the more specific source wins: `PLAN.<ticket>` > `.agents/` > `AGENTS.md`.
+Ground rules always apply.
