@@ -1,0 +1,9 @@
+{
+    "editor.formatOnSave": true,
+    "files.encoding": "utf8",
+    "files.eol": "\n",
+    "formatFiles.extensionsToInclude": "rs,toml",
+    "formatFiles.excludedFolders": [
+        "target"
+    ]
+}
