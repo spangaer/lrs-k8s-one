@@ -238,8 +238,13 @@ changing it.
 
       Decision: build and run with Podman by default, and keep the build VM as a second builder
       for when Podman falls short.
-- [ ] **S3, pull path.** From inside the S1 guest, `curl http://10.0.2.2:5000/v2/` reaches the
+- [x] **S3, pull path.** From inside the S1 guest, `curl http://10.0.2.2:5000/v2/` reaches the
       registry in the devcontainer.
+
+      Covered by S2, part 2: the build VM pushed to `10.0.2.2:5000`, with the same Debian
+      image and slirp networking as the cluster VM. The k3s mirror config for plain-HTTP
+      pulls is left to step 9, which tests it end to end; a separate spike would mean building
+      the cluster VM by hand once more.
 
 ### Implementation
 
