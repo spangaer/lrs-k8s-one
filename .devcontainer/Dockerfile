@@ -12,3 +12,13 @@ RUN printf '%s\n' \
 # just: simpler more portable make
 # tk: Tcl/Tk runtime (wish) for the bundled git gui and gitk
 RUN apt-get update && apt-get install -y cmake time ripgrep just tk
+
+# k8s test env tooling
+# qemu-*, cloud-image-utils: cluster and build VMs under TCG, seed.iso via genisoimage
+# podman, uidmap, netavark: rootless builds and runs; podman needs netavark even on host network
+# docker-registry: local registry the VMs pull from and push to
+# docker-cli, docker-buildx: client for the build VM's dockerd
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      qemu-system-x86 qemu-utils cloud-image-utils \
+      podman uidmap netavark \
+      docker-registry docker-cli docker-buildx

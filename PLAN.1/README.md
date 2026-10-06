@@ -248,7 +248,7 @@ changing it.
 
 ### Implementation
 
-1. [ ] Dockerfile: add a separate tooling line with `--no-install-recommends`: `qemu-system-x86`,
+1. [x] Dockerfile: add a separate tooling line with `--no-install-recommends`: `qemu-system-x86`,
        `qemu-utils`, `cloud-image-utils`, `podman`, `uidmap`, `netavark`,
        `docker-registry`, `docker-cli`, `docker-buildx`. Run the same package installation
        line in the running container.
