@@ -85,8 +85,9 @@ devcontainer                                   cluster VM (TCG), Debian 13
   [spike-s2.md](./spike-s2.md), part 3.
   - ID mapping: `/etc/subuid` and `/etc/subgid` hold `vscode:1:999` and `vscode:1001:64536`,
     and `newuidmap` / `newgidmap` use file capabilities (`cap_setuid` / `cap_setgid`) instead
-    of setuid root, which fails here for lack of `sys_admin`. Without either fix, Podman
-    falls back to a single ID with only a warning, and `chown` in builds is lost.
+    of setuid root, which fails here for lack of `sys_admin`. Without either fix, Buildah
+    falls back to a single ID with only a warning, and `chown` in builds is lost; Podman 5.4
+    fails outright.
   - `containers.conf` sets `netns = "host"` and binds `/proc:/proc:rbind`. crun can't mount a
     fresh `/proc` here, so without the bind every `RUN` step and every `podman run` fails.
     With it, both get Podman's default private PID namespace, rather than needing
@@ -99,7 +100,9 @@ devcontainer                                   cluster VM (TCG), Debian 13
     shows the devcontainer's processes and PIDs, so `ps` and `/proc/<pid>` lookups are off;
     `--pid=host` fixes that per run, but then `podman stop` hangs. Ports bind straight on the
     devcontainer's loopback, and resource limits are silently ignored.
-  - `registries.conf` marks `localhost:5000` as `insecure`; `cgroup_manager` is `cgroupfs`.
+  - a `registries.conf.d/` drop-in marks `localhost:5000` as `insecure`; a user
+    `registries.conf` would disable the system's short-name aliases. `cgroup_manager` is
+    `cgroupfs`.
   - `netavark` must be installed, even though it isn't used with the host network.
 - **Build VM.** A second QEMU VM with Docker, BuildKit via `docker-buildx`, see
   [spike-s2.md](./spike-s2.md), part 2. Separate from the cluster VM, so builds don't compete
@@ -141,6 +144,8 @@ devcontainer                                   cluster VM (TCG), Debian 13
 ```
 justfile                       recipes, see below
 versions.just                  pinned versions and checksums, imported by the justfile
+env/setup.sh                   devcontainer setup, run by `just setup`
+env/fetch.sh                   fetch a pinned download into the cache, verify its checksum
 env/vm/cluster/user-data.yaml  cloud-init template: ssh key, k3s install, registries.yaml
 env/vm/build/user-data.yaml    cloud-init template: ssh key, Docker install, TCP drop-in
 env/registry/config.yml        registry config
@@ -252,7 +257,7 @@ changing it.
        `qemu-utils`, `cloud-image-utils`, `podman`, `uidmap`, `netavark`,
        `docker-registry`, `docker-cli`, `docker-buildx`. Run the same package installation
        line in the running container.
-2. [ ] Devcontainer setup, by an idempotent `setup` recipe; `postCreateCommand` runs
+2. [x] Devcontainer setup, by an idempotent `setup` recipe; `postCreateCommand` runs
        `just setup`. With `sudo -n`, the ID mapping: write `/etc/subuid` and `/etc/subgid`, drop
        setuid from `newuidmap` and `newgidmap` and give them file capabilities, see
        [Design](#design); only change what differs. Also with `sudo -n`, install the pinned
@@ -260,9 +265,16 @@ changing it.
        `~/.local/bin` isn't on `PATH`. In `~/.config/containers/`:
        `storage.conf` (overlay, `graphroot` at an absolute `.local/podman/storage` path,
        `runroot` under `/tmp` as `XDG_RUNTIME_DIR` is unset), `containers.conf` (host network,
-       `/proc` bind, `cgroupfs`) and `registries.conf`. Recreate temporary runtime storage
-       rather than relying on it surviving rebuilds. `setup` fails with an actionable error if
-       `podman unshare cat /proc/self/uid_map` shows a single line.
+       `/proc` bind, `cgroupfs`) and a `registries.conf.d/` drop-in. Recreate temporary runtime
+       storage rather than relying on it surviving rebuilds. `setup` fails with an actionable
+       error if `podman unshare cat /proc/self/uid_map` shows fewer than 3 lines.
+
+       Done: `env/setup.sh` does the work, `env/fetch.sh` fetches and verifies cached
+       downloads, for reuse by `vm-image`. Subordinate ranges are derived from the
+       devcontainer's own ID map. Verified: reinstalling `uidmap` resets both setuid and caps,
+       and a rerun repairs it; without `sudo` it fails with an actionable error; `podman build`
+       (5 s) and `podman run` keep `1234:1234` ownership. `shellcheck` was added to the
+       Dockerfile to lint the scripts.
 3. [x] `.gitignore`: add `.local/` (done early, during S1).
 4. [ ] Registry config plus `registry-up` / `registry-down`.
 5. [ ] Cluster VM cloud-init `user-data`: generated ssh key for the image's default `debian`

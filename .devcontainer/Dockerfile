@@ -11,7 +11,8 @@ RUN printf '%s\n' \
 # ripgrep: used by copilot for code search
 # just: simpler more portable make
 # tk: Tcl/Tk runtime (wish) for the bundled git gui and gitk
-RUN apt-get update && apt-get install -y cmake time ripgrep just tk
+# shellcheck: lint for shell scripts
+RUN apt-get update && apt-get install -y cmake time ripgrep just tk shellcheck
 
 # k8s test env tooling
 # qemu-*, cloud-image-utils: cluster and build VMs under TCG, seed.iso via genisoimage
