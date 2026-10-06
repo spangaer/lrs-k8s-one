@@ -39,6 +39,10 @@ The systemd pin is already in the [Dockerfile](../.devcontainer/Dockerfile).
 Resolve and pin k3s and kubectl to the same Kubernetes minor version before S1. Use Debian's
 `kubectl` package if it matches; otherwise cache a pinned, checksum-verified kubectl binary.
 
+Resolved: k3s `v1.36.5+k3s1` (the `stable` channel). Debian's `kubectl` is 1.32, which is end
+of life, so we cache the upstream kubectl `v1.36.5` binary. All pins live in
+[versions.just](../versions.just).
+
 ## Design
 
 ```
@@ -76,8 +80,8 @@ devcontainer                                   QEMU VM (TCG), Debian 13
   - `.local/podman/`: Podman and Buildah image/build storage, configured by `setup`
   - `.local/kubeconfig`: admin credentials, written automatically with mode `0600`
 - **VM sizing.** Let `n` be the number of vCPUs available to the devcontainer. The guest defaults
-  to `n` vCPUs if `n < 4`, 4 if `4 <= n < 10`, and `floor(0.4 * n)` otherwise. RAM defaults to
-  8 GB and disk to 30 GB; all sizes are overridable as `just` variables.
+  to `n` vCPUs if `n < 4`, 4 if `4 <= n < 8`, and `floor(n / 2)` otherwise. RAM defaults to
+  6 GB and disk to 30 GB; all sizes are overridable as `just` variables.
   TCG runs with `-accel tcg,thread=multi -cpu max`.
 
 ### Proposed source layout
@@ -120,18 +124,36 @@ Recipes must be safe to repeat and converge on the requested state. An already r
 must not be started twice, and stopping an already stopped process is a no-op. Validate process
 identity before acting on PID files; stale files must never cause an unrelated process to be
 stopped. Failures and bounded readiness timeouts return nonzero with an actionable error and
-relevant log locations, rather than silently continuing. Wait for process exit before removing
-its state. `vm-reset` deliberately replaces the cluster, but preserves caches and registry/build
-storage; it clears stale host keys and kubeconfig, which the next startup regenerates.
+relevant log locations, rather than silently continuing. Long waits print a progress line about
+every 20 s, with the current phase, elapsed time and, where within reach, a concrete status
+rather than a generic heartbeat, so it's clear what they're doing. Wait for process exit before
+removing its state. `vm-reset` deliberately replaces the cluster, but preserves caches and
+registry/build storage; it clears stale host keys and kubeconfig, which the next startup
+regenerates.
 `vm-image` preserves existing disks and seeds. If pinned versions or bootstrap settings differ
 from an existing VM, report the mismatch and require an explicit reset rather than silently
 changing it.
 
 ### Spikes first (de-risk)
 
-- [ ] **S1, boot under TCG.** Boot the Debian `genericcloud` image with a minimal cloud-init seed
+- [x] **S1, boot under TCG.** Boot the Debian `genericcloud` image with a minimal cloud-init seed
       and install k3s by hand. Measure boot time, k3s-ready time and idle CPU (with traefik and
       metrics-server running), and tune the vCPU/RAM defaults from that.
+
+      Results, with 16 host vCPUs, measured with 6 guest vCPUs and 8 GB (see
+      [spike-s1.md](./spike-s1.md) for the commands):
+      - first boot: ssh after 59 s, cloud-init done after 67 s; root fs grew to 30 GB
+      - airgapped k3s install from a 274 MB `seed.iso` (works fine, no data disk needed):
+        script 88 s, node `Ready` 95 s, traefik and metrics-server running 262 s
+      - warm restart: ssh 52 s, node `Ready` 92 s, traefik serving 197 s; clean shutdown 16 s
+      - idle: ~1 host core for QEMU, ~560m and ~1.2 GB used in the guest, QEMU RSS ~4.3 GB
+      - startup saturates the vCPUs (load ~7.7), so more vCPUs mostly speed up startup
+      - clock: NTP synced, no drift seen against the devcontainer
+      - `helm-install-traefik` restarts a few times while it waits for its CRDs, that's normal
+
+      Defaults changed: RAM 8 → 6 GB, as the guest uses ~1.2 GB idle and host RAM is tight;
+      vCPUs 40 → 50% of `n`, since startup is CPU bound. Readiness timeouts: 10 min for first
+      boot plus install, 5 min for a warm start.
 - [ ] **S2, podman builds.** Install podman and buildah. Get `podman build` working as the normal
       devcontainer user: fetch a base image and build an image with a real `RUN` instruction.
       Find the isolation mode (`chroot` is a candidate), storage
@@ -154,9 +176,10 @@ changing it.
        written by an idempotent `setup` recipe; `postCreateCommand` runs `just setup`. Point
        Podman and Buildah image/build storage at `.local/podman/`, using an absolute workspace
        path, and recreate temporary runtime storage rather than relying on it surviving rebuilds.
-3. [ ] `.gitignore`: add `.local/`.
+3. [x] `.gitignore`: add `.local/` (done early, during S1).
 4. [ ] Registry config plus `registry-up` / `registry-down`.
-5. [ ] cloud-init `user-data`: user + generated ssh key, k3s install with
+5. [ ] cloud-init `user-data`: generated ssh key for the image's default `debian` user (no
+       `users:` block, which would replace it), k3s install with
        kubeconfig mode `0600` (traefik and metrics-server kept), and
        `/etc/rancher/k3s/registries.yaml` with the mirror.
        The ssh key is generated once into `.local/vm/` if missing; `vm-image` renders the
@@ -171,14 +194,23 @@ changing it.
 6. [ ] VM recipes: `vm-image`, `vm-up` (readiness wait with generous TCG timeouts), `vm-down`,
        `vm-ssh`, `vm-reset`, `kubeconfig`. `vm-up` checks cloud-init completion and reports
        bootstrap errors rather than treating SSH availability as successful provisioning.
+       While waiting for QEMU to exit, `vm-down` shows the last serial log line. `vm-up`'s
+       progress lines name the phase and show its status, e.g. `[1m40s] cloud-init: running`:
+
+       - boot, until ssh: last line of the serial log
+       - cloud-init: `cloud-init status`, plus the last line of its output log
+       - node: the node's `Ready` condition and reason
+       - addons: pod counts by phase in `kube-system`, and which ones aren't ready yet
+       - ingress: HTTP status from traefik through the `8080` hostfwd
+
        Verify `vm-ssh *args` argument handling against the guest: compare received argument
        counts and values for spaces, empty strings, quotes and literal shell metacharacters.
        Choose the implementation from those results and keep the checks as regression tests.
        Other recipes reuse this helper. Host keys go to `.local/vm/known_hosts`
        (`StrictHostKeyChecking=accept-new`); `vm-reset` deletes that file.
        `kubeconfig` reads the guest file via non-interactive `sudo -n`, writes the local copy
-       atomically with mode `0600`, and uses `https://127.0.0.1:6443` as the API endpoint. Give
-       the guest SSH user the required passwordless sudo access during provisioning.
+       atomically with mode `0600`, and uses `https://127.0.0.1:6443` as the API endpoint. The
+       `debian` user already gets passwordless sudo from cloud-init.
 7. [ ] `KUBECONFIG` set via the `justfile` and `remoteEnv` in devcontainer.json, so a plain
        `kubectl` works in any terminal.
 8. [ ] Smoke test with a public image (`traefik/whoami`) to verify the cluster without the
