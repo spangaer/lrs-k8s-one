@@ -1,0 +1,23 @@
+# local registry, started by `just registry-up`
+version: 0.1
+log:
+  fields:
+    service: registry
+storage:
+  # rootdirectory comes from REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY, as it must be absolute
+  filesystem: {}
+  # allows removing images, then `docker-registry garbage-collect` frees the space
+  delete:
+    enabled: true
+http:
+  # plain HTTP, loopback only; the VMs reach it as 10.0.2.2, which slirp maps to loopback
+  addr: 127.0.0.1:5000
+  headers:
+    # stop browsers from treating pushed blobs as HTML or scripts
+    X-Content-Type-Options: [nosniff]
+health:
+  # stat storage every 10s; after 3 failures in a row every request gets 503 until one succeeds
+  storagedriver:
+    enabled: true
+    interval: 10s
+    threshold: 3

@@ -5,11 +5,11 @@
 # usage: setup.sh <local dir> <kubectl file> <kubectl url> <kubectl sha256>
 set -euo pipefail
 
-local_dir=$1 kubectl_file=$2 kubectl_url=$3 kubectl_sha256=$4
 here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=env/lib.sh
+source "$here/lib.sh"
 
-die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
-note() { printf 'setup: %s\n' "$*"; }
+local_dir=$1 kubectl_file=$2 kubectl_url=$3 kubectl_sha256=$4
 
 # write stdin to a file if its content differs, extra args prefix the write, e.g. sudo -n
 changed=

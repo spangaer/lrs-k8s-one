@@ -3,9 +3,11 @@
 # usage: fetch.sh <url> <sha256 or sha512> <file>
 set -euo pipefail
 
-url=$1 sum=$2 file=$3
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=env/lib.sh
+source "$here/lib.sh"
 
-die() { printf 'fetch: %s\n' "$*" >&2; exit 1; }
+url=$1 sum=$2 file=$3
 
 case ${#sum} in
     64) tool=sha256sum ;;
@@ -22,7 +24,7 @@ if [[ -f $file ]]; then
 fi
 
 mkdir -p "$(dirname "$file")"
-printf 'fetch: %s\n' "$url"
+note "$url"
 curl -fL --retry 3 --progress-bar -o "$file.part" "$url"
 if ! check "$file.part"; then
     rm -f "$file.part"

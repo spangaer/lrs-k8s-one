@@ -127,7 +127,7 @@ devcontainer                                   cluster VM (TCG), Debian 13
   - `.local/vm/`: the ssh key, shared by both VMs, and a dir per VM, `cluster/` and `build/`,
     each with a qcow2 overlay (backed by the cached image), `seed.iso`, `known_hosts`, pid
     file and serial log
-  - `.local/registry/`: registry storage
+  - `.local/registry/`: registry storage in `storage/`, plus its pid file and log
   - `.local/podman/`: Podman image/build storage, configured by `setup`. It holds files owned
     by mapped IDs, so plain `rm` and `du` fail. Clean up with `podman rmi`,
     `podman system prune` or, to wipe it all, `podman system reset`; for raw file access, use
@@ -146,6 +146,8 @@ justfile                       recipes, see below
 versions.just                  pinned versions and checksums, imported by the justfile
 env/setup.sh                   devcontainer setup, run by `just setup`
 env/fetch.sh                   fetch a pinned download into the cache, verify its checksum
+env/lib.sh                     shared helpers: messages, pid file checks, waits with progress
+env/registry.sh                start or stop the registry, run by `just registry-up` / `-down`
 env/vm/cluster/user-data.yaml  cloud-init template: ssh key, k3s install, registries.yaml
 env/vm/build/user-data.yaml    cloud-init template: ssh key, Docker install, TCP drop-in
 env/registry/config.yml        registry config
@@ -276,7 +278,15 @@ changing it.
        (5 s) and `podman run` keep `1234:1234` ownership. `shellcheck` was added to the
        Dockerfile to lint the scripts.
 3. [x] `.gitignore`: add `.local/` (done early, during S1).
-4. [ ] Registry config plus `registry-up` / `registry-down`.
+4. [x] Registry config plus `registry-up` / `registry-down`.
+
+       Done: storage comes from `REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY`, as it must be
+       absolute. `env/lib.sh` holds the pid file check (executable plus a command line marker)
+       and `wait_for`, for reuse by the VM recipes. Verified: repeated up and down, a stale pid
+       file naming an unrelated process, a registry killed out of band, the port taken by
+       another server or a foreign registry, and a pull after a restart. Right after a
+       background start, `$!` is often still the shell or `setsid` (~1 in 4), so startup
+       checks the child by PID, and the pid file match only for readiness; 30 cycles passed.
 5. [ ] Cluster VM cloud-init `user-data`: generated ssh key for the image's default `debian`
        user (no `users:` block, which would replace it), k3s install with kubeconfig mode
        `0600` (traefik and metrics-server kept), and `/etc/rancher/k3s/registries.yaml` with
