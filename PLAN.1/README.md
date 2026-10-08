@@ -148,6 +148,7 @@ env/setup.sh                   devcontainer setup, run by `just setup`
 env/fetch.sh                   fetch a pinned download into the cache, verify its checksum
 env/lib.sh                     shared helpers: messages, pid file checks, waits with progress
 env/registry.sh                start or stop the registry, run by `just registry-up` / `-down`
+env/seed.sh                    build a VM's seed.iso: ssh key, rendered user-data, meta-data
 env/vm/cluster/user-data.yaml  cloud-init template: ssh key, k3s install, registries.yaml
 env/vm/build/user-data.yaml    cloud-init template: ssh key, Docker install, TCP drop-in
 env/registry/config.yml        registry config
@@ -287,7 +288,7 @@ changing it.
        another server or a foreign registry, and a pull after a restart. Right after a
        background start, `$!` is often still the shell or `setsid` (~1 in 4), so startup
        checks the child by PID, and the pid file match only for readiness; 30 cycles passed.
-5. [ ] Cluster VM cloud-init `user-data`: generated ssh key for the image's default `debian`
+5. [x] Cluster VM cloud-init `user-data`: generated ssh key for the image's default `debian`
        user (no `users:` block, which would replace it), k3s install with kubeconfig mode
        `0600` (traefik and metrics-server kept), and `/etc/rancher/k3s/registries.yaml` with
        the mirror.
@@ -301,6 +302,18 @@ changing it.
        binary at `/usr/local/bin/k3s`, places the matching images tarball under
        `/var/lib/rancher/k3s/agent/images/`, and runs the pinned `install.sh` with
        `INSTALL_K3S_SKIP_DOWNLOAD=true`.
+
+       Done: `env/seed.sh` generates the key, renders `user-data` and builds `seed.iso` for any
+       VM; extra files are passed as `<name in iso>=<file>`, so the build VM can reuse it.
+       It keeps an existing `meta-data`, so only deleting the VM dir changes the instance ID;
+       the VM dir's name is used as hostname, so the node is called `cluster`. Verified with a
+       fresh boot from its output: ssh 44 s, no cloud-init errors, root fs 30 GB, kubeconfig
+       `0600`, node `Ready`, traefik serving after ~6 min, and a `crictl pull` of a pushed image
+       through the mirror; `/mnt/seed` is unmounted afterwards.
+       The private `_vm-seed` recipe fetches what the selected VM's seed needs and calls
+       `seed.sh` with the file names its `user-data` expects; one `case` branch per VM, only
+       `cluster` for now. `vm-image` calls it in step 6. Verified: a missing cache file is
+       fetched, a rerun keeps the instance ID, and `vm=build` fails with an actionable error.
 6. [ ] VM recipes, for any VM named by `vm`, see [Recipes](#recipes-just): `vm-image`, `vm-up`
        (readiness wait with generous TCG timeouts), `vm-down`, `vm-ssh`, `vm-reset`,
        `kubeconfig`. `vm-up` checks cloud-init completion and reports
