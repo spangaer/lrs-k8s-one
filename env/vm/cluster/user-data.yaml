@@ -1,0 +1,25 @@
+#cloud-config
+# no `users:` block, as it would replace the image's default `debian` user
+ssh_authorized_keys:
+  - ${SSH_PUBKEY}
+
+write_files:
+  # plain-HTTP mirror: slirp routes 10.0.2.2 to the devcontainer's loopback
+  - path: /etc/rancher/k3s/registries.yaml
+    permissions: "0644"
+    content: |
+      mirrors:
+        "localhost:5000":
+          endpoint:
+            - "http://10.0.2.2:5000"
+
+runcmd:
+  - |
+    set -euo pipefail
+    mkdir -p /mnt/seed
+    mountpoint -q /mnt/seed || mount -o ro LABEL=cidata /mnt/seed
+    install -m 0755 /mnt/seed/k3s /usr/local/bin/k3s
+    install -D -m 0644 /mnt/seed/k3s-airgap-images-amd64.tar.zst \
+      /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst
+    INSTALL_K3S_SKIP_DOWNLOAD=true K3S_KUBECONFIG_MODE=0600 sh /mnt/seed/install.sh
+    umount /mnt/seed
