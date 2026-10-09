@@ -125,14 +125,15 @@ devcontainer                                   cluster VM (TCG), Debian 13
     Pin `install.sh` to an immutable revision as well. Never delete a cached cloud image while
     an overlay still uses it as its backing image.
   - `.local/vm/`: the ssh key, shared by both VMs, and a dir per VM, `cluster/` and `build/`,
-    each with a qcow2 overlay (backed by the cached image), `seed.iso`, `known_hosts`, pid
-    file and serial log
+    each with a qcow2 overlay (backed by the cached image), `seed.iso` with its `user-data` and
+    `meta-data`, `settings` it was created from, `known_hosts`, pid file, QMP socket, serial
+    log and QEMU log. `cluster/` also holds `kubeconfig`, the admin credentials, written
+    automatically with mode `0600`
   - `.local/registry/`: registry storage in `storage/`, plus its pid file and log
   - `.local/podman/`: Podman image/build storage, configured by `setup`. It holds files owned
     by mapped IDs, so plain `rm` and `du` fail. Clean up with `podman rmi`,
     `podman system prune` or, to wipe it all, `podman system reset`; for raw file access, use
     `podman unshare`
-  - `.local/kubeconfig`: admin credentials, written automatically with mode `0600`
 - **VM sizing.** Let `n` be the number of vCPUs available to the devcontainer. The guest defaults
   to `n` vCPUs if `n < 4`, 4 if `4 <= n < 8`, and `floor(n / 2)` otherwise. RAM defaults to
   6 GB and disk to 30 GB; all sizes are overridable as `just` variables.
@@ -149,11 +150,13 @@ env/fetch.sh                   fetch a pinned download into the cache, verify it
 env/lib.sh                     shared helpers: messages, pid file checks, waits with progress
 env/registry.sh                start or stop the registry, run by `just registry-up` / `-down`
 env/seed.sh                    build a VM's seed.iso: ssh key, rendered user-data, meta-data
+env/vm.sh                      VM actions for the vm-* recipes and kubeconfig, per-VM settings
 env/vm/cluster/user-data.yaml  cloud-init template: ssh key, k3s install, registries.yaml
 env/vm/build/user-data.yaml    cloud-init template: ssh key, Docker install, TCP drop-in
 env/registry/config.yml        registry config
 test/hello/Dockerfile          tiny http hello-world image
 test/hello/hello.yaml          Deployment + Service + Ingress
+test/vm-ssh.sh                 regression test for vm-ssh argument handling
 ```
 
 ### Recipes (`just`)
@@ -169,7 +172,8 @@ The `vm-*` recipes act on the cluster VM by default, and on the build VM with `j
 | `vm-up` / `vm-down` | boot the VM (daemonized) and wait for k3s or Docker / shut down cleanly |
 | `vm-ssh` | ssh into the guest, or run a command: `just vm-ssh <cmd> ...` |
 | `vm-reset` | drop the overlay to get a fresh VM (the cache stays) |
-| `kubeconfig` | copy `k3s.yaml` out of the guest into `.local/kubeconfig` |
+| `kubeconfig` | copy `k3s.yaml` out of the guest into `.local/vm/cluster/kubeconfig` |
+| `test-vm-ssh` | bring the VM up if needed, check that `vm-ssh` passes arguments unchanged |
 | `up` / `down` | registry and cluster VM together; `down` also stops a running build VM |
 | `hello` | build, push, deploy, then curl the hello-world image |
 
@@ -312,9 +316,9 @@ changing it.
        through the mirror; `/mnt/seed` is unmounted afterwards.
        The private `_vm-seed` recipe fetches what the selected VM's seed needs and calls
        `seed.sh` with the file names its `user-data` expects; one `case` branch per VM, only
-       `cluster` for now. `vm-image` calls it in step 6. Verified: a missing cache file is
+       `cluster` for now. Step 6 merged it into `vm-image`. Verified: a missing cache file is
        fetched, a rerun keeps the instance ID, and `vm=build` fails with an actionable error.
-6. [ ] VM recipes, for any VM named by `vm`, see [Recipes](#recipes-just): `vm-image`, `vm-up`
+6. [x] VM recipes, for any VM named by `vm`, see [Recipes](#recipes-just): `vm-image`, `vm-up`
        (readiness wait with generous TCG timeouts), `vm-down`, `vm-ssh`, `vm-reset`,
        `kubeconfig`. `vm-up` checks cloud-init completion and reports
        bootstrap errors rather than treating SSH availability as successful provisioning.
@@ -336,11 +340,33 @@ changing it.
        `kubeconfig` reads the guest file via non-interactive `sudo -n`, writes the local copy
        atomically with mode `0600`, and uses `https://127.0.0.1:6443` as the API endpoint. The
        `debian` user already gets passwordless sudo from cloud-init.
+
+       Done: `env/vm.sh` holds the actions and the per-VM settings; the recipes pass `vm`, and
+       sizing as `vm_cpus`, `vm_mem` and `vm_disk`. `vm-image` took over `_vm-seed`, as it needs
+       the same file list: it writes what the VM was created from (base image, disk size,
+       template hash, ssh key, seed files) to `settings`, and on a difference lists it and asks
+       for `vm-reset`. `vm-up` depends on `vm-image`, which costs ~1 s for the checksums.
+       - `vm-ssh` single-quotes each argument for the remote shell, as plain ssh joins them and
+         the remote shell splits them again: an `it's` broke it. `test-vm-ssh` keeps the checks:
+         20 tricky arguments, stdin, the exit code and the login shell without arguments.
+       - `vm-down` presses the ACPI power button through QEMU's QMP socket, needing neither ssh
+         nor sudo, and repeats it every 10 s, as a press in early boot is lost: 9 s from a
+         running guest, 43 s from 6 s into boot. `socat` was added to the Dockerfile for that.
+       - phases share one time budget, polled every 5 s, as each check costs an ssh connection
+         and often a `k3s kubectl` (~1 s and ~3 s idle, far more while k3s starts). First boots
+         took 6-7 min with 8 vCPUs, more than in S1, so timeouts went up to 15 min first and
+         6 min warm. A warm start takes ~3 min.
+       - the kubeconfig lives in the cluster VM's dir, like `known_hosts`: it belongs to that
+         VM instance, and `vm-reset` removes it with the rest.
+       Verified: first boot, warm start, `vm-up` when already up (16 s), a mismatch with
+       `vm_disk=40G`, a stale pid file naming another process, a taken port, `kill -9` of QEMU
+       then `vm-up`, `vm-reset` of a running VM and a fresh start without downloads, and
+       `kubectl get nodes` with the written kubeconfig.
 7. [ ] `KUBECONFIG` and `DOCKER_HOST`: the `justfile` exports both, so recipes work in any
        context, e.g. CI, not only the devcontainer. Use `env()` defaults, so a caller's value
-       wins: `env("KUBECONFIG", justfile_directory() / ".local/kubeconfig")`. `remoteEnv` in
-       devcontainer.json sets the same values, so a plain `kubectl` and `docker` work in VS
-       Code terminals too.
+       wins: `env("KUBECONFIG", justfile_directory() / ".local/vm/cluster/kubeconfig")`.
+       `remoteEnv` in devcontainer.json sets the same values, so a plain `kubectl` and
+       `docker` work in VS Code terminals too.
 8. [ ] Smoke test with a public image (`traefik/whoami`) to verify the cluster without the
        registry.
 9. [ ] `hello`: build a tiny image with `podman build`, push it to `localhost:5000`, deploy

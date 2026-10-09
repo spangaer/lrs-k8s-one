@@ -39,20 +39,23 @@ fmt_secs() {
     fi
 }
 
-# Poll a command every second until it succeeds, or return 1 after a timeout. Prints a
-# progress line about every 20 s, e.g. `[1m40s] cloud-init: running`, its status from a
-# function. The command may call die to stop waiting early, e.g. when a process exited.
+# Poll a command until it succeeds, or return 1 after a timeout. Prints a progress line about
+# every 20 s, e.g. `[1m40s] cloud-init: running`, its status from a function. The command may
+# call die to stop waiting early, e.g. when a process exited. Polls every `wait_interval` s,
+# default 1. If `wait_start` is set, e.g. to $SECONDS before a series of waits, elapsed time
+# and timeout count from there, so the phases of one startup share a time budget.
 # usage: wait_for <timeout s> <phase> <status function> <command...>
 wait_for() {
-    local timeout=$1 phase=$2 status=$3 start=$SECONDS next=20 elapsed
+    local timeout=$1 phase=$2 status=$3 start=${wait_start:-$SECONDS} elapsed next
     shift 3
+    next=$(((SECONDS - start) / 20 * 20 + 20))
     until "$@"; do
         elapsed=$((SECONDS - start))
         ((elapsed < timeout)) || return 1
         if ((elapsed >= next)); then
             printf '[%s] %s: %s\n' "$(fmt_secs "$elapsed")" "$phase" "$("$status")"
-            next=$((next + 20))
+            next=$((elapsed / 20 * 20 + 20))
         fi
-        sleep 1
+        sleep "${wait_interval:-1}"
     done
 }

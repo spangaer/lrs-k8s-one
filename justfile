@@ -5,11 +5,18 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 local := justfile_directory() / ".local"
 cache := local / "cache"
 
-# the VM the vm-* recipes act on: cluster or build
+# the VM the vm-* recipes act on: cluster or build, e.g. just vm=build vm-up
 vm := "cluster"
-vm_dir := local / "vm" / vm
-ssh_key := local / "vm/id_ed25519"
 
+# VM sizing, e.g. just vm_mem=8G vm-up; empty for the VM's default, see env/vm.sh
+vm_cpus := ""
+vm_mem := ""
+vm_disk := ""
+export VM_CPUS := vm_cpus
+export VM_MEM := vm_mem
+export VM_DISK := vm_disk
+
+debian_image := cache / debian_image_file
 k3s_bin := cache / "k3s-" + k3s_version
 k3s_images := cache / replace(k3s_images_file, ".tar.zst", "-" + k3s_version + ".tar.zst")
 k3s_install := cache / "k3s-install-" + k3s_install_rev + ".sh"
@@ -31,12 +38,13 @@ registry-up:
 registry-down:
     env/registry.sh down {{ quote(local) }}
 
-# fetch what the VM's seed needs and build its seed.iso; names in the iso match its user-data
-_vm-seed:
+# fetch downloads, create the VM's disk and seed; an existing VM is kept, see vm-reset
+vm-image:
     #!/usr/bin/env bash
     # a shebang runs the body as one script, as plain recipes run each line in its own shell,
     # which breaks the multi-line case and the array; set shell doesn't apply, hence the set
     set -euo pipefail
+    # files for the seed, named as the VM's user-data expects them
     case {{ quote(vm) }} in
         cluster)
             env/fetch.sh {{ quote(k3s_url / "k3s") }} {{ k3s_sha256 }} {{ quote(k3s_bin) }}
@@ -51,9 +59,35 @@ _vm-seed:
             )
             ;;
         *)
-            echo "_vm-seed: unknown vm '{{ vm }}', expected cluster" >&2
+            echo "vm-image: unknown vm '{{ vm }}', expected cluster" >&2
             exit 1
             ;;
     esac
-    env/seed.sh {{ quote(vm_dir) }} {{ quote("env/vm" / vm / "user-data.yaml") }} \
-        {{ quote(ssh_key) }} "${files[@]}"
+    env/fetch.sh {{ quote(debian_image_url) }} {{ debian_image_sha512 }} \
+        {{ quote(debian_image) }}
+    env/vm.sh {{ quote(vm) }} image {{ quote(local) }} {{ quote(debian_image) }} "${files[@]}"
+
+# boot the VM unless it runs, and wait until it's ready
+vm-up: vm-image
+    env/vm.sh {{ quote(vm) }} up {{ quote(local) }}
+
+# shut the VM down cleanly
+vm-down:
+    env/vm.sh {{ quote(vm) }} down {{ quote(local) }}
+
+# ssh into the VM, or run a command there with its arguments unchanged
+[positional-arguments]
+vm-ssh *args:
+    @env/vm.sh {{ quote(vm) }} ssh {{ quote(local) }} "$@"
+
+# stop the VM and drop its disk and seed, for a fresh one; the caches stay
+vm-reset:
+    env/vm.sh {{ quote(vm) }} reset {{ quote(local) }}
+
+# copy the cluster's admin kubeconfig to .local/vm/cluster/kubeconfig
+kubeconfig:
+    env/vm.sh cluster kubeconfig {{ quote(local) }}
+
+# check that vm-ssh passes arguments unchanged
+test-vm-ssh: vm-up
+    test/vm-ssh.sh {{ quote(vm) }}
